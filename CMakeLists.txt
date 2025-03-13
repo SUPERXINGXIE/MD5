@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.10)
-project(MD5Calculator)
+project(UniMD5)
 
 # 设置 C++17 标准
 set(CMAKE_CXX_STANDARD 17)
@@ -9,24 +9,39 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# 查找 OpenSSL，优先使用静态库
-find_package(OpenSSL REQUIRED)
-# 强制静态链接 OpenSSL
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# 强制静态链接运行时
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_compile_options(/MT)
+endif()
+
+# 指定 OpenSSL 静态链接
 set(OPENSSL_USE_STATIC_LIBS TRUE)
+if(WIN32)
+    set(OPENSSL_MSVC_STATIC_RT TRUE)
+    set(OPENSSL_ROOT_DIR "C:/Program Files/OpenSSL-Win64")
+endif()
+# Linux 下不指定 OPENSSL_ROOT_DIR，使用系统默认路径（如 /usr/lib/x86_64-linux-gnu）
+find_package(OpenSSL REQUIRED)
+if(NOT OPENSSL_FOUND)
+    message(FATAL_ERROR "OpenSSL not found. Please ensure static libraries are installed.")
+endif()
 
 # 添加共享库目标
 add_library(md5calculator SHARED
     src/md5calculator.cpp
 )
 
-# Windows 下禁用 C++17 弃用警告
-if(MSVC)
-    target_compile_definitions(md5calculator PRIVATE _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
+# 跨平台宏定义
+if(WIN32)
+    target_compile_definitions(md5calculator PRIVATE 
+        _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
+        _CRT_SECURE_NO_WARNINGS
+        MD5CALCULATOR_EXPORTS
+    )
+else()
+    target_compile_definitions(md5calculator PRIVATE MD5CALCULATOR_EXPORTS)
 endif()
-
-# 定义导出宏
-target_compile_definitions(md5calculator PRIVATE MD5CALCULATOR_EXPORTS)
 
 # 设置头文件路径
 target_include_directories(md5calculator PUBLIC
@@ -34,18 +49,22 @@ target_include_directories(md5calculator PUBLIC
     ${OPENSSL_INCLUDE_DIR}
 )
 
-# 链接 OpenSSL 静态库
-target_link_libraries(md5calculator PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
-
-# GCC 7.x 下链接 stdc++fs 并定义 USE_EXPERIMENTAL_FS
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "8.0")
-        target_link_libraries(md5calculator PRIVATE stdc++fs)
-        target_compile_definitions(md5calculator PRIVATE USE_EXPERIMENTAL_FS)
-    endif()
+# 链接库
+if(WIN32)
+    target_link_libraries(md5calculator PRIVATE 
+        ${OPENSSL_CRYPTO_LIBRARY}
+        Ws2_32.lib
+        Crypt32.lib
+    )
+else()
+    target_link_libraries(md5calculator PRIVATE 
+        ${OPENSSL_CRYPTO_LIBRARY}
+        -static-libstdc++  # 静态链接 libstdc++
+        -static-libgcc     # 静态链接 libgcc
+    )
 endif()
 
-# 构建后复制库文件到项目根目录
+# 构建后复制库文件
 if(WIN32)
     add_custom_command(TARGET md5calculator POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy
@@ -60,7 +79,7 @@ else()
     )
 endif()
 
-# 安装目标
+# 安装目标（可选）
 install(TARGETS md5calculator
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin

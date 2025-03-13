@@ -2,112 +2,132 @@
 #include <openssl/evp.h>
 #include <fstream>
 #include <sstream>
-#include <cstring>
 #include <iomanip>
-
-#ifdef USE_EXPERIMENTAL_FS
-#include <experimental/filesystem>
-namespace fs = std::experimental::filesystem;
-#else
-#include <filesystem>
-namespace fs = std::filesystem;
-#endif
+#include <cstring>
+#include <vector>
+#include <string>
 
 #ifdef _WIN32
-#define PATH_SEPARATOR "\\"
+#include <windows.h>
 #else
-#define PATH_SEPARATOR "/"
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
-static std::string calculateMD5(const std::string& filePath) {
+std::string calculateMD5(const std::string& filePath) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         return "";
     }
 
-    EVP_MD_CTX* md5Context = EVP_MD_CTX_new();
-    if (!md5Context || EVP_DigestInit_ex(md5Context, EVP_md5(), nullptr) != 1) {
-        EVP_MD_CTX_free(md5Context);
-        return "";
+    EVP_MD_CTX* mdContext = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(mdContext, EVP_md5(), nullptr);
+
+    constexpr size_t bufferSize = 4096;
+    char buffer[bufferSize];
+    while (file.read(buffer, bufferSize) || file.gcount()) {
+        EVP_DigestUpdate(mdContext, buffer, file.gcount());
     }
 
-    char buffer[4096];
-    while (file.read(buffer, sizeof(buffer))) {
-        if (EVP_DigestUpdate(md5Context, buffer, file.gcount()) != 1) {
-            EVP_MD_CTX_free(md5Context);
-            return "";
-        }
-    }
-    if (file.gcount() > 0) {
-        if (EVP_DigestUpdate(md5Context, buffer, file.gcount()) != 1) {
-            EVP_MD_CTX_free(md5Context);
-            return "";
-        }
-    }
-
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digestLen = 0;
-    if (EVP_DigestFinal_ex(md5Context, digest, &digestLen) != 1) {
-        EVP_MD_CTX_free(md5Context);
-        return "";
-    }
-    EVP_MD_CTX_free(md5Context);
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hashLen;
+    EVP_DigestFinal_ex(mdContext, hash, &hashLen);
+    EVP_MD_CTX_free(mdContext);
+    file.close();
 
     std::stringstream ss;
-    for (unsigned int i = 0; i < digestLen; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(digest[i]);
+    for (unsigned int i = 0; i < hashLen; ++i) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
     }
-
     return ss.str();
 }
 
-static std::vector<std::string> getAllFiles(const std::string& dirPath) {
+#ifdef _WIN32
+std::vector<std::string> getAllFiles(const std::string& dirPath) {
     std::vector<std::string> files;
-    try {
-        for (const auto& entry : fs::recursive_directory_iterator(dirPath)) {
-#ifdef USE_EXPERIMENTAL_FS
-            // GCC 7.x: 使用 status() 获取文件类型
-            if (fs::is_regular_file(entry.status())) {
-                files.push_back(entry.path().string());
-            }
-#else
-            // GCC 8.0+ 或 MSVC: 直接使用 is_regular_file()
-            if (entry.is_regular_file()) {
-                files.push_back(entry.path().string());
-            }
-#endif
-        }
-    } catch (const std::exception&) {
-        // 忽略目录访问错误
+    WIN32_FIND_DATA findData;
+    HANDLE hFind = INVALID_HANDLE_VALUE;
+    std::string searchPath = dirPath + "\\*";
+
+    hFind = FindFirstFile(searchPath.c_str(), &findData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        return files;
     }
+
+    do {
+        if (findData.cFileName[0] == '.') {
+            continue;
+        }
+        std::string fullPath = dirPath + "\\" + findData.cFileName;
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            auto subFiles = getAllFiles(fullPath);
+            files.insert(files.end(), subFiles.begin(), subFiles.end());
+        } else {
+            files.push_back(fullPath);
+        }
+    } while (FindNextFile(hFind, &findData) != 0);
+
+    FindClose(hFind);
     return files;
 }
-
-extern "C" {
-    static thread_local std::string lastResult;
-
-    MD5CALCULATOR_API const char* calculateFileMD5(const char* filePath) {
-        lastResult = calculateMD5(filePath);
-        return lastResult.c_str();
+#else
+std::vector<std::string> getAllFiles(const std::string& dirPath) {
+    std::vector<std::string> files;
+    DIR* dir = opendir(dirPath.c_str());
+    if (!dir) {
+        return files;
     }
 
-    MD5CALCULATOR_API void calculateDirectoryMD5(const char* dirPath, MD5Result** results, int* count) {
-        std::vector<std::string> files = getAllFiles(dirPath);
-        *count = static_cast<int>(files.size());
-
-        if (*count == 0) {
-            *results = nullptr;
-            return;
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue;
         }
-
-        *results = new MD5Result[*count];
-        for (int i = 0; i < *count; i++) {
-            (*results)[i].filePath = files[i];
-            (*results)[i].md5Hash = calculateMD5(files[i]);
+        std::string fullPath = dirPath + "/" + entry->d_name;
+        struct stat statBuf;
+        if (stat(fullPath.c_str(), &statBuf) == -1) {
+            continue;
+        }
+        if (S_ISDIR(statBuf.st_mode)) {
+            auto subFiles = getAllFiles(fullPath);
+            files.insert(files.end(), subFiles.begin(), subFiles.end());
+        } else if (S_ISREG(statBuf.st_mode)) {
+            files.push_back(fullPath);
         }
     }
+    closedir(dir);
+    return files;
+}
+#endif
 
-    MD5CALCULATOR_API void freeResults(MD5Result* results) {
-        delete[] results;
+extern "C" MD5CALCULATOR_API char* calculateFileMD5(const char* filePath) {
+    std::string md5 = calculateMD5(filePath);
+    if (md5.empty()) {
+        return nullptr;
     }
+    char* result = (char*)malloc(md5.length() + 1);
+    strcpy(result, md5.c_str());
+    return result;
+}
+
+extern "C" MD5CALCULATOR_API void calculateDirectoryMD5(const char* dirPath, MD5Result** results, int* count) {
+    std::vector<std::string> files = getAllFiles(dirPath);
+    *count = static_cast<int>(files.size());
+    *results = (MD5Result*)malloc(*count * sizeof(MD5Result));
+
+    for (int i = 0; i < *count; ++i) {
+        std::string md5 = calculateMD5(files[i]);
+        (*results)[i].filePath = (char*)malloc(files[i].length() + 1);
+        (*results)[i].md5 = (char*)malloc(md5.length() + 1);
+        strcpy((*results)[i].filePath, files[i].c_str());
+        strcpy((*results)[i].md5, md5.c_str());
+    }
+}
+
+extern "C" MD5CALCULATOR_API void freeMD5Results(MD5Result* results, int count) {
+    for (int i = 0; i < count; ++i) {
+        free(results[i].filePath);
+        free(results[i].md5);
+    }
+    free(results);
 }
