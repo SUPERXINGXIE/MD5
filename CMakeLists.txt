@@ -9,8 +9,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# 查找 OpenSSL
+# 查找 OpenSSL，优先使用静态库
 find_package(OpenSSL REQUIRED)
+# 强制静态链接 OpenSSL
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(OPENSSL_USE_STATIC_LIBS TRUE)
 
 # 添加共享库目标
 add_library(md5calculator SHARED
@@ -31,8 +34,8 @@ target_include_directories(md5calculator PUBLIC
     ${OPENSSL_INCLUDE_DIR}
 )
 
-# 链接 OpenSSL
-target_link_libraries(md5calculator PRIVATE OpenSSL::Crypto)
+# 链接 OpenSSL 静态库
+target_link_libraries(md5calculator PRIVATE ${OPENSSL_CRYPTO_LIBRARY})
 
 # GCC 7.x 下链接 stdc++fs 并定义 USE_EXPERIMENTAL_FS
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
