@@ -22,6 +22,11 @@
 
 ## 编译指南 / Compilation Guide
 
+环境要求 / Environment Requirements
+​Python 3.7 或更高版本 / Python 3.7 or higher
+本工具依赖于 Python 3.7 及以上版本，请确保系统已安装正确版本的 Python。
+This tool requires Python 3.7 or higher. Please ensure the correct version of Python is installed on your system.
+
 ### Windows 环境配置 / Windows Environment Setup
 
 1. **安装 Visual Studio 2022 / Install Visual Studio 2022**  
